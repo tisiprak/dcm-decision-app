@@ -3,7 +3,8 @@ const express    = require('express');
 const mongoose   = require('mongoose');
 const multer     = require('multer');
 const path       = require('path');
-const fs         = require('fs');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const rateLimit  = require('express-rate-limit');
 const Record     = require('./models/Record');
 
@@ -12,29 +13,26 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_PASS = process.env.ADMIN_PASS || '1234';
 const MONGO_URI  = process.env.MONGO_URI  || '';
 
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/', rateLimit({ windowMs: 60_000, max: 120 }));
 
-const uploadDir = path.join(__dirname, 'public', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename:    (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2,7)}${ext}`);
-  }
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'dcm-decision',
+    allowed_formats: ['jpg','jpeg','png','webp','gif'],
+    transformation: [{ width: 1200, crop: 'limit', quality: 'auto' }],
+  },
 });
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ok = /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype);
-    cb(ok ? null : new Error('Only image files allowed'), ok);
-  }
-});
+const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log('MongoDB connected'))
@@ -54,10 +52,10 @@ app.get('/api/records', async (req, res) => {
     if (mgrDecision    && mgrDecision    !== '(ทั้งหมด)') q.mgrDecision    = mgrDecision;
     if (alignment      && alignment      !== '(ทั้งหมด)') q.alignment      = new RegExp(alignment === '✅ ตรงกัน' ? '✅' : '⚠', 'i');
     if (shift          && shift          !== '(ทั้งหมด)') q.shift          = shift;
-    if (empName)  q.empName  = new RegExp(empName,  'i');
-    if (mgrName)  q.mgrName  = new RegExp(mgrName,  'i');
-    if (docNo)    q.docNo    = new RegExp(docNo,     'i');
-    if (search)   q.$or = [
+    if (empName) q.empName = new RegExp(empName, 'i');
+    if (mgrName) q.mgrName = new RegExp(mgrName, 'i');
+    if (docNo)   q.docNo   = new RegExp(docNo,   'i');
+    if (search)  q.$or = [
       { docNo: new RegExp(search,'i') },{ empName: new RegExp(search,'i') },
       { mgrName: new RegExp(search,'i') },{ defectCategory: new RegExp(search,'i') },
       { defectType: new RegExp(search,'i') },{ lotNo: new RegExp(search,'i') },
@@ -85,9 +83,19 @@ app.post('/api/records', upload.single('photo'), async (req, res) => {
                     : `⚠ ไม่ตรงกัน | พนักงาน: ${empDec} | ผู้บริหาร: ${mgrDec}`;
     const rec = new Record({
       id: Date.now().toString() + Math.random().toString(36).slice(2,6),
-      ...b, qtyDefect: Number(b.qtyDefect)||0, qtyNG: Number(b.qtyNG)||0,
-      photoPath: req.file ? `/uploads/${req.file.filename}` : '',
-      empDecision: empDec, mgrDecision: mgrDec, alignment,
+      docNo: b.docNo||'', date: b.date||'', shift: b.shift||'',
+      model: b.model||'', line: b.line||'', lotNo: b.lotNo||'',
+      qtyDefect: Number(b.qtyDefect)||0, ncrRef: b.ncrRef||'',
+      defectCategory: b.defectCategory||'', defectType: b.defectType||'',
+      qtyNG: Number(b.qtyNG)||0, problemDesc: b.problemDesc||'',
+      photoPath: req.file ? req.file.path : '',
+      photoPublicId: req.file ? req.file.filename : '',
+      empName: b.empName||'', empId: b.empId||'', empDept: b.empDept||'',
+      empPosition: b.empPosition||'', empDecision: empDec, empRemark: b.empRemark||'',
+      mgrName: b.mgrName||'', mgrPosition: b.mgrPosition||'',
+      mgrDecision: mgrDec, mgrRemark: b.mgrRemark||'',
+      decisionDate: b.decisionDate||'', problemDate: b.problemDate||'',
+      alignment,
     });
     await rec.save();
     res.json({ ok: true, id: rec.id });
@@ -99,7 +107,9 @@ app.delete('/api/records/:id', express.json(), async (req, res) => {
   try {
     const rec = await Record.findOne({ id: req.params.id });
     if (!rec) return res.status(404).json({ error: 'Not found' });
-    if (rec.photoPath) { const p = path.join(__dirname,'public',rec.photoPath); if (fs.existsSync(p)) fs.unlinkSync(p); }
+    if (rec.photoPublicId) {
+      await cloudinary.uploader.destroy(rec.photoPublicId).catch(() => {});
+    }
     await Record.deleteOne({ id: req.params.id });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -108,13 +118,4 @@ app.delete('/api/records/:id', express.json(), async (req, res) => {
 app.get('/api/stats', async (req, res) => {
   try {
     const total      = await Record.countDocuments();
-    const aligned    = await Record.countDocuments({ alignment: /✅/ });
-    const misaligned = await Record.countDocuments({ alignment: /⚠/ });
-    const pending    = await Record.countDocuments({ alignment: /รอ/ });
-    const byDefect   = await Record.aggregate([{ $group: { _id: '$defectCategory', count: { $sum: 1 } } },{ $sort: { count: -1 } }]);
-    res.json({ total, aligned, misaligned, pending, byDefect });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.get('*', (req, res) => { res.sendFile(path.join(__dirname,'public','index.html')); });
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    const aligned
