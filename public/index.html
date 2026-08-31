@@ -575,9 +575,10 @@ function recordCardHTML(r){
   const badgeClass=alignClass;
   const badgeText=r.alignment.includes('✅')?'✅ ตรงกัน':r.alignment.includes('⚠')?'⚠ ไม่ตรงกัน':'⏳ รอตัดสินใจ';
   const pct=r.qtyDefect>0?((r.qtyNG/r.qtyDefect)*100).toFixed(1)+'%':'—';
-  const photoHTML=r.photoPath
-    ?`<div class="rec-photo"><img src="${esc(r.photoPath)}" alt="Before" onclick="openLightbox('${esc(r.photoPath)}')" title="คลิกเพื่อขยาย"></div>`
-    :'<div style="font-size:12px;color:var(--muted);margin-top:6px">ไม่มีรูปภาพ</div>';
+  const photoSrc = r.photoPath && (r.photoPath.startsWith('http') ? r.photoPath : '');
+  const photoHTML = photoSrc
+    ? `<div class="rec-photo"><img src="${photoSrc}" alt="Before" onclick="openLightbox('${photoSrc}')" title="คลิกเพื่อขยาย"></div>`
+    : '<div style="font-size:12px;color:var(--muted);margin-top:6px">ไม่มีรูปภาพ</div>';
 
   return `<div class="record-card ${alignClass}">
     <div class="rec-header">
