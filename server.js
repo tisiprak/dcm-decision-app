@@ -5,7 +5,6 @@ const multer     = require('multer');
 const path       = require('path');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const rateLimit  = require('express-rate-limit');
 const Record     = require('./models/Record');
 
 const app  = express();
@@ -13,21 +12,17 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_PASS = process.env.ADMIN_PASS || '1234';
 const MONGO_URI  = process.env.MONGO_URI  || '';
 
-// ── Cloudinary config ────────────────────────────────────────
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// ── Middleware ────────────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/api/', rateLimit({ windowMs: 60_000, max: 120, validate: { xForwardedForHeader: false } }));
 
-// ── Multer + Cloudinary storage ───────────────────────────────
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -38,19 +33,20 @@ const storage = new CloudinaryStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
 
-// ── MongoDB ───────────────────────────────────────────────────
 mongoose.connect(MONGO_URI)
   .then(() => console.log('MongoDB connected'))
   .catch(err => console.error('MongoDB error:', err));
 
-// ── Auth helper ───────────────────────────────────────────────
 function checkAdmin(req, res) {
   const pass = req.body?.adminPass || req.headers['x-admin-pass'] || '';
-  if (pass !== ADMIN_PASS) { res.status(403).json({ error: 'รหัส Admin ไม่ถูกต้อง' }); return false; }
+  console.log('Admin check - received pass:', pass, 'expected:', ADMIN_PASS);
+  if (pass !== ADMIN_PASS) {
+    res.status(403).json({ error: 'รหัส Admin ไม่ถูกต้อง' });
+    return false;
+  }
   return true;
 }
 
-// ── ROUTES ────────────────────────────────────────────────────
 app.get('/api/records', async (req, res) => {
   try {
     const { defectCategory, mgrDecision, alignment, shift, empName, mgrName, docNo, search } = req.query;
@@ -114,7 +110,6 @@ app.delete('/api/records/:id', async (req, res) => {
   try {
     const rec = await Record.findOne({ id: req.params.id });
     if (!rec) return res.status(404).json({ error: 'Not found' });
-    // ลบรูปจาก Cloudinary
     if (rec.photoPublicId) {
       await cloudinary.uploader.destroy(rec.photoPublicId).catch(() => {});
     }
