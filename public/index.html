@@ -695,9 +695,9 @@ async function confirmAdmin(){
   const pass=document.getElementById('admin-pass').value;
   const errEl=document.getElementById('admin-err');
   if(!pass){errEl.textContent='กรุณากรอกรหัส';errEl.style.display='block';return}
-  closeModal();
   if(!pendingAction)return;
   const{type,id}=pendingAction; pendingAction=null;
+  closeModal();
   if(type==='delete'){
     showLoading();
     try{
