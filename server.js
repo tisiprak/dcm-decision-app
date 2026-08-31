@@ -110,12 +110,12 @@ app.delete('/api/records/:id', async (req, res) => {
   try {
     const rec = await Record.findOne({ id: req.params.id });
     if (!rec) return res.status(404).json({ error: 'Not found' });
-    if (rec.photoPublicId) {
-      await cloudinary.uploader.destroy(rec.photoPublicId).catch(() => {});
+    if (rec.photoPublicId && typeof rec.photoPublicId === 'string' && rec.photoPublicId.trim()) {
+      try { await cloudinary.uploader.destroy(rec.photoPublicId); } catch(ce) { console.log('Cloudinary skip:', ce.message); }
     }
     await Record.deleteOne({ id: req.params.id });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete error:', e); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/stats', async (req, res) => {
