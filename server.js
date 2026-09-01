@@ -53,19 +53,25 @@ app.get('/api/records', async (req, res) => {
     const q = {};
     if (defectCategory && defectCategory !== '(ทั้งหมด)') q.defectCategory = defectCategory;
     if (mgrDecision    && mgrDecision    !== '(ทั้งหมด)') q.mgrDecision    = mgrDecision;
-    if (alignment      && alignment      !== '(ทั้งหมด)') q.alignment      = new RegExp(alignment === '✅ ตรงกัน' ? '✅' : '⚠', 'i');
-    if (shift          && shift          !== '(ทั้งหมด)') q.shift          = shift;
-    if (empName) q.empName = new RegExp(empName, 'i');
-    if (mgrName) q.mgrName = new RegExp(mgrName, 'i');
-    if (docNo)   q.docNo   = new RegExp(docNo,   'i');
-    if (search)  q.$or = [
-      { docNo: new RegExp(search,'i') },{ empName: new RegExp(search,'i') },
-      { mgrName: new RegExp(search,'i') },{ defectCategory: new RegExp(search,'i') },
-      { defectType: new RegExp(search,'i') },{ lotNo: new RegExp(search,'i') },
-    ];
+    if (alignment) {
+      if (alignment === '✅ ตรงกัน') q.alignment = /✅/;
+      else if (alignment === '⚠ ไม่ตรงกัน') q.alignment = /⚠/;
+    }
+    if (shift && shift !== '(ทั้งหมด)') q.shift = shift;
+    if (empName) q.empName = new RegExp(empName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    if (mgrName) q.mgrName = new RegExp(mgrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    if (docNo)   q.docNo   = new RegExp(docNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),   'i');
+    if (search) {
+      const s = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      q.$or = [
+        { docNo: new RegExp(s,'i') }, { empName: new RegExp(s,'i') },
+        { mgrName: new RegExp(s,'i') }, { defectCategory: new RegExp(s,'i') },
+        { defectType: new RegExp(s,'i') }, { lotNo: new RegExp(s,'i') },
+      ];
+    }
     const records = await Record.find(q).sort({ createdAt: -1 }).limit(500);
     res.json(records);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('GET records error:', e); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/records/:id', async (req, res) => {
