@@ -25,21 +25,28 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: {
+  params: async (req, file) => ({
     folder: 'dcm-decision',
     allowed_formats: ['jpg','jpeg','png','webp','gif'],
     transformation: [{ width: 1200, crop: 'limit', quality: 'auto' }],
-  },
+  }),
 });
-const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\//.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Only images allowed'), false);
+  }
+});
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB error:', err));
+  .catch(err => console.log('MongoDB error:', err.message));
 
 function checkAdmin(req, res) {
   const pass = req.body?.adminPass || req.headers['x-admin-pass'] || '';
-  console.log('Admin check - received pass:', pass, 'expected:', ADMIN_PASS);
   if (pass !== ADMIN_PASS) {
     res.status(403).json({ error: 'รหัส Admin ไม่ถูกต้อง' });
     return false;
@@ -51,27 +58,28 @@ app.get('/api/records', async (req, res) => {
   try {
     const { defectCategory, mgrDecision, alignment, shift, empName, mgrName, docNo, search } = req.query;
     const q = {};
-    if (defectCategory && defectCategory !== '(ทั้งหมด)') q.defectCategory = defectCategory;
-    if (mgrDecision    && mgrDecision    !== '(ทั้งหมด)') q.mgrDecision    = mgrDecision;
-    if (alignment) {
-      if (alignment === '✅ ตรงกัน') q.alignment = /✅/;
-      else if (alignment === '⚠ ไม่ตรงกัน') q.alignment = /⚠/;
-    }
-    if (shift && shift !== '(ทั้งหมด)') q.shift = shift;
-    if (empName) q.empName = new RegExp(empName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    if (mgrName) q.mgrName = new RegExp(mgrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    if (docNo)   q.docNo   = new RegExp(docNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),   'i');
-    if (search) {
-      const s = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      q.$or = [
-        { docNo: new RegExp(s,'i') }, { empName: new RegExp(s,'i') },
-        { mgrName: new RegExp(s,'i') }, { defectCategory: new RegExp(s,'i') },
-        { defectType: new RegExp(s,'i') }, { lotNo: new RegExp(s,'i') },
-      ];
-    }
+    if (defectCategory) q.defectCategory = defectCategory;
+    if (mgrDecision)    q.mgrDecision    = mgrDecision;
+    if (alignment === '✅ ตรงกัน')   q.alignment = /✅/;
+    if (alignment === '⚠ ไม่ตรงกัน') q.alignment = /⚠/;
+    if (shift)    q.shift    = shift;
+    if (empName)  q.empName  = { $regex: empName,  $options: 'i' };
+    if (mgrName)  q.mgrName  = { $regex: mgrName,  $options: 'i' };
+    if (docNo)    q.docNo    = { $regex: docNo,    $options: 'i' };
+    if (search)   q.$or = [
+      { docNo:          { $regex: search, $options: 'i' } },
+      { empName:        { $regex: search, $options: 'i' } },
+      { mgrName:        { $regex: search, $options: 'i' } },
+      { defectCategory: { $regex: search, $options: 'i' } },
+      { defectType:     { $regex: search, $options: 'i' } },
+      { lotNo:          { $regex: search, $options: 'i' } },
+    ];
     const records = await Record.find(q).sort({ createdAt: -1 }).limit(500);
     res.json(records);
-  } catch (e) { console.error('GET records error:', e.message, e.stack); res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.log('GET /api/records error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/records/:id', async (req, res) => {
@@ -82,7 +90,15 @@ app.get('/api/records/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/records', upload.single('photo'), async (req, res) => {
+app.post('/api/records', (req, res, next) => {
+  upload.single('photo')(req, res, (err) => {
+    if (err) {
+      console.log('Upload error:', err.message);
+      return next();
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     const b = req.body;
     const empDec = b.empDecision || '';
@@ -108,7 +124,10 @@ app.post('/api/records', upload.single('photo'), async (req, res) => {
     });
     await rec.save();
     res.json({ ok: true, id: rec.id });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.log('POST /api/records error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.delete('/api/records/:id', async (req, res) => {
@@ -116,12 +135,15 @@ app.delete('/api/records/:id', async (req, res) => {
   try {
     const rec = await Record.findOne({ id: req.params.id });
     if (!rec) return res.status(404).json({ error: 'Not found' });
-    if (rec.photoPublicId && typeof rec.photoPublicId === 'string' && rec.photoPublicId.trim()) {
-      try { await cloudinary.uploader.destroy(rec.photoPublicId); } catch(ce) { console.log('Cloudinary skip:', ce.message); }
+    if (rec.photoPublicId && rec.photoPublicId.length > 0) {
+      try { await cloudinary.uploader.destroy(rec.photoPublicId); } catch(ce) {}
     }
     await Record.deleteOne({ id: req.params.id });
     res.json({ ok: true });
-  } catch (e) { console.error('Delete error:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.log('DELETE error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/stats', async (req, res) => {
