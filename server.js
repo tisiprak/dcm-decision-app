@@ -71,7 +71,7 @@ app.get('/api/records', async (req, res) => {
     }
     const records = await Record.find(q).sort({ createdAt: -1 }).limit(500);
     res.json(records);
-  } catch (e) { console.error('GET records error:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('GET records error:', e.message, e.stack); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/records/:id', async (req, res) => {
